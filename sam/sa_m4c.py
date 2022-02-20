@@ -4,11 +4,11 @@ import math
 from collections import Counter
 
 import torch
+from torch import nn
 import torch.nn.functional as F
 from pytorch_transformers.modeling_bert import (BertConfig, BertEmbeddings,
                                                 BertEncoder, BertLayerNorm,
                                                 BertPreTrainedModel)
-from torch import nn
 
 from sam.beam_search import BeamSearch
 from sam.textvqa_encoders import ImageEncoder

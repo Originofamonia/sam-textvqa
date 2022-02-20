@@ -18,11 +18,11 @@ stvqa_imdb: "data/stvqa/stvqa_{}_imdb.npy"
 max_seq_length: 20
 max_obj_num: 100 # object features + avg feature
 max_ocr_num: 50 # ocr tokens + avg feature
-batch_size: 32
+batch_size: 96
 train_split: train
 val_split: val
 lr: 0.0001
-num_epoch: 3
+num_epoch: 100
 debug: false
 max_grad_norm: 0.25
 model_type: m4c_spatial
