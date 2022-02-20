@@ -38,3 +38,6 @@ wandb
 .ipynb_checkpoints
 
 data/tvqa*
+data/textvqa/*
+data/evaluation/*
+data/vocabs/*
