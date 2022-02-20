@@ -37,10 +37,11 @@ def get_config():
     parser.add_argument(
         "--seed", type=int, default=0, help="Random seed for reproducibility"
     )
-    parser.add_argument("--config", required=True, type=str, help="Experiment configuration file")
+    parser.add_argument("--config", type=str, default='config.yml',
+        help="Experiment configuration file")
 
     parser.add_argument(
-        "--tag", type=str, help="Experiment folder name", default="debug"
+        "--tag", type=str, help="Experiment folder name", default="tvqa"
     )
 
     parser.add_argument("--pretrained_eval", default="", help="Path of pre-trained checkpoint")
