@@ -35,12 +35,12 @@ def get_config():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--num_train_epochs",
-        default=100,
+        default=3,
         type=int,
         help="Total training epochs",
     )
     parser.add_argument(
-        "--seed", type=int, default=0, help="Random seed for reproducibility"
+        "--seed", type=int, default=444, help="Random seed for reproducibility"
     )
     parser.add_argument("--config", type=str, default='configs/train-tvqa-eval-tvqa-c3.yml',
         help="Experiment configuration file")
@@ -86,7 +86,7 @@ def get_config():
 
 def main():
     task_cfg, args, save_path = get_config()
-    checkpoint_path = os.path.join(save_path, "best_model.tar")
+    checkpoint_path = os.path.join(save_path, "best_model.pt")
     base_lr = task_cfg["lr"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
