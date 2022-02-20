@@ -1,6 +1,7 @@
 import argparse
 import logging
 import os
+import sys
 import random
 from io import open
 from pprint import pprint
@@ -10,6 +11,9 @@ import torch
 import yaml
 from easydict import EasyDict as edict
 from tqdm import tqdm
+
+pwd = os.getcwd()
+sys.path.insert(0, pwd)
 
 from evaluator import Evaluator
 from sam.sa_m4c import SAM4C, BertConfig
@@ -24,6 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def get_config():
     # load command line args
@@ -37,7 +42,7 @@ def get_config():
     parser.add_argument(
         "--seed", type=int, default=0, help="Random seed for reproducibility"
     )
-    parser.add_argument("--config", type=str, default='config.yml',
+    parser.add_argument("--config", type=str, default='configs/train-tvqa-eval-tvqa-c3.yml',
         help="Experiment configuration file")
 
     parser.add_argument(

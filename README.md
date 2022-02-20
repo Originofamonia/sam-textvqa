@@ -24,7 +24,7 @@ We propose a novel spatially aware self-attention layer such that each visual en
 Create a fresh conda environment, and install all dependencies.
 
 ```text
-conda create -n sam python=3.6
+conda create -n sam python=3.8
 conda activate sam
 cd sam-textvqa
 pip install -r requirements.txt
