@@ -155,7 +155,7 @@ def main():
             score_values.append(score)
 
             # Handle logging
-            if step % 30 == 0 and step != 0:
+            if step % 41 == 0 and step != 0:
                 loss_avg, score_avg = float(sum(loss_values) / len(loss_values)), float(
                     sum(score_values) / len(score_values)
                 )
@@ -173,7 +173,7 @@ def main():
             model,
         )
         logger.info(
-            f"[Validation] Current VQA: {curr_val_score} at {global_step} | Best VQA: {best_val_score} at {best_val_step}"
+            f"[Validation] Current VQA: {curr_val_score:.3f} at {global_step} | Best VQA: {best_val_score:.3f} at {best_val_step}"
         )
 
         if curr_val_score > best_val_score:
@@ -193,7 +193,7 @@ def main():
             )
 
     print(
-        f"Best Validation Score: {best_val_score}, Best Validation Epoch: {best_val_step}"
+        f"Best Validation Score: {best_val_score:.3f}, Best Validation Epoch: {best_val_step}"
     )
     return checkpoint_path, model, dataloaders
 
