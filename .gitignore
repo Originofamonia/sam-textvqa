@@ -37,3 +37,4 @@ wandb
 # IPython Notebook
 .ipynb_checkpoints
 
+data/tvqa*
