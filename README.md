@@ -27,12 +27,8 @@ Create a fresh conda environment, and install all dependencies.
 conda create -n sam python=3.6
 conda activate sam
 cd sam-textvqa
-pip install -r requirements.txt
-```
-
-Install pytorch
-```
 conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
+pip install -r requirements.txt
 ```
 
 Finally, install apex from: https://github.com/NVIDIA/apex

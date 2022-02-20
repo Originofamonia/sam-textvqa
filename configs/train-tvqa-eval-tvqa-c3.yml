@@ -18,7 +18,7 @@ stvqa_imdb: "data/stvqa/stvqa_{}_imdb.npy"
 max_seq_length: 20
 max_obj_num: 100 # object features + avg feature
 max_ocr_num: 50 # ocr tokens + avg feature
-batch_size: 96
+batch_size: 32
 train_split: train
 val_split: val
 lr: 0.0001

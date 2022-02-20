@@ -377,7 +377,7 @@ class TextBert(BertPreTrainedModel):
         self.embeddings = BertEmbeddings(config)
         self.encoder = BertEncoder(config)
         # self.apply(self.init_weights)  # old versions of pytorch_transformers
-        self.init_weights(self)
+        self.init_weights()
 
     def forward(self, batch_dict):
         encoder_inputs = self.embeddings(batch_dict["question_indices"])
@@ -777,7 +777,7 @@ class MMT(BertPreTrainedModel):
         self.prev_pred_embeddings = PrevPredEmbeddings(config)
         self.encoder = BertSpatialEncoder(config)
         # self.apply(self.init_weights)  # old versions of pytorch_transformers
-        self.init_weights(self)
+        self.init_weights()
 
     def forward(self, batch_dict, fixed_ans_emb):
         # build embeddings for predictions in previous decoding steps

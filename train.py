@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def get_config():
     # load command line args
@@ -155,12 +155,12 @@ def main():
             score_values.append(score)
 
             # Handle logging
-            if step % 20 == 0 and step != 0:
+            if step % 30 == 0 and step != 0:
                 loss_avg, score_avg = float(sum(loss_values) / len(loss_values)), float(
                     sum(score_values) / len(score_values)
                 )
                 loss_values, score_values = [], []
-                log_str = f"Epoch: {epoch_id}: Iter: {iter_id};  loss = {loss_avg}; accuracy  = {score_avg}"
+                log_str = f"Epoch: {epoch_id}: Iter: {iter_id};  loss = {loss_avg:.3f}; accuracy  = {score_avg:.3f}"
                 if step % 100 == 0:
                     log_str += f"\n lr rates = {[float(grp['lr']) for grp in optimizer.param_groups]}"
                 logger.info(log_str)
