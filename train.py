@@ -165,11 +165,11 @@ def main():
                     log_str += f"\n lr rates = {[float(grp['lr']) for grp in optimizer.param_groups]}"
                 logger.info(log_str)
 
-        # Evaluate after every epoch
-        curr_val_score = evaluate(dataloaders, task_cfg, device, model)
-        logger.info(
-            f"[Validation] Current VQA: {curr_val_score:.3f} at {global_step} | Best VQA: {best_val_score:.3f} at {best_val_step}"
-        )
+        if epoch_id % 9 ==0:
+            curr_val_score = evaluate(dataloaders, task_cfg, device, model)
+            logger.info(
+                f"[Validation] Current VQA: {curr_val_score:.3f} at {global_step} | Best VQA: {best_val_score:.3f} at {best_val_step}"
+            )
 
         if curr_val_score > best_val_score:
             logger.info(f"Saving Checkpoint: {checkpoint_path}")
