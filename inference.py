@@ -1,3 +1,6 @@
+"""
+load saved model and infer M4C to draw z^dec * obj/ocr
+"""
 import argparse
 import logging
 import os
@@ -28,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 def get_config():
     # load command line args
@@ -49,7 +52,8 @@ def get_config():
         "--tag", type=str, help="Experiment folder name", default="tvqa"
     )
 
-    parser.add_argument("--pretrained_eval", default="", help="Path of pre-trained checkpoint")
+    parser.add_argument("--pretrained_eval", default="save/tvqa/best_model.pt", 
+        help="Path of pretrained checkpoint")
     opt = parser.parse_args()
 
     # Load configuration
@@ -122,6 +126,8 @@ def main():
         logger.info(
             f"Dumping Evaluation results at: {os.path.dirname(opt.pretrained_eval)}"
         )
+        # add load model here
+        model = model.load_state_dict(torch.load(opt.pretrained_eval)['model_state_dict'])
         return opt.pretrained_eval, model, dataloaders
 
     # This validation score is used for model-saving.

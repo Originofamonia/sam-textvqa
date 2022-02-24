@@ -709,8 +709,8 @@ class M4CAnswerProcessor:
 
 class Processors:
     """
-    Contains static-processors used for processing question/ocr-tokens, image/ocr features,
-        decoding answer.
+    Contains static-processors used for processing question/ocr-tokens, 
+    image/ocr features, decoding answer.
     """
 
     def __init__(self, bert_tokenizer, vocab_type="4k", only_registry=False):

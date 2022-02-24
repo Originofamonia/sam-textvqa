@@ -22,7 +22,7 @@ batch_size: 96
 train_split: train
 val_split: val
 lr: 0.0001
-num_epoch: 100
+num_epochs: 100
 debug: false
 max_grad_norm: 0.25
 model_type: m4c_spatial
@@ -61,7 +61,7 @@ SA-M4C:
   textvqa_vocab_size: 3998
   pooling_method: "mul"
   ptr_query_size: 768
-  ocr_feature_size: 3002
+  ocr_feature_size: 2952
   obj_feature_size: 2048
   finetune_ocr_obj: false
   use_phoc_fasttext: true

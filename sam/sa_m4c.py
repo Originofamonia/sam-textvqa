@@ -106,7 +106,7 @@ class SAM4C(nn.Module):
         # object appearance feature: Faster R-CNN
         # (YK) Todo: support for last-layer finetuning
         assert self.frcn_encoder_type == "default"
-        self.obj_faster_rcnn_fc7 = ImageEncoder(
+        self.obj_faster_rcnn_fc7 = ImageEncoder(  # default: directly return x
             encoder_type=self.frcn_encoder_type,
             in_dim=2048,
         )
@@ -202,7 +202,7 @@ class SAM4C(nn.Module):
         return results_dict
 
     def _forward_obj_encoding(self, batch_dict):
-        # object appearance feature: Faster R-CNN fc7
+        # object appearance feature: Faster R-CNN fc7, no just identity
         obj_fc7 = self.obj_faster_rcnn_fc7(batch_dict["pad_obj_features"])
 
         if self.normalize:
@@ -211,7 +211,7 @@ class SAM4C(nn.Module):
         obj_feat = obj_fc7
 
         # remove bbox-area
-        obj_bbox = batch_dict["pad_obj_bboxes"][:, :, :-1]
+        obj_bbox = batch_dict["pad_obj_bboxes"][:, :, :-1]  # remove last one
         obj_mmt_in = self.obj_feat_layer_norm(
             self.linear_obj_feat_to_mmt_in(obj_feat)
         ) + self.obj_bbox_layer_norm(self.linear_obj_bbox_to_mmt_in(obj_bbox))
@@ -238,15 +238,15 @@ class SAM4C(nn.Module):
             ocr_fc7 = F.normalize(ocr_fc7, dim=-1)
 
         # OCR order vectors (legacy from LoRRA model; set to all zeros)
-        # TODO remove OCR order vectors; they are not needed
-        ocr_order_vectors = ocr_fc6.new_zeros((ocr_phoc.size(0), 50, 50))
+        # TODO remove OCR order vectors; they are not needed, done
+        # ocr_order_vectors = ocr_fc6.new_zeros((ocr_phoc.size(0), 50, 50))
 
         if self.mmt_config.use_phoc_fasttext:
             ocr_feat = torch.cat(
-                [ocr_fasttext, ocr_phoc, ocr_fc7, ocr_order_vectors], dim=-1
+                [ocr_fasttext, ocr_phoc, ocr_fc7], dim=-1
             )
         else:
-            ocr_feat = torch.cat([ocr_fc7, ocr_order_vectors], dim=-1)
+            ocr_feat = ocr_fc7
 
         # remove area
         ocr_bbox = batch_dict["pad_ocr_bboxes"][:, :, :-1]
@@ -782,9 +782,9 @@ class MMT(BertPreTrainedModel):
     def forward(self, batch_dict, fixed_ans_emb):
         # build embeddings for predictions in previous decoding steps
         # fixed_ans_emb is an embedding lookup table for each fixed vocabulary
-        dec_emb = self.prev_pred_embeddings(
+        dec_emb = self.prev_pred_embeddings(  # z^dec, [B, 12, 768]
             fixed_ans_emb, batch_dict["ocr_mmt_in"], batch_dict["train_prev_inds"]
-        )
+        )  # batch_dict["train_prev_inds"]: ans word ids, [B, 12]
 
         # a zero mask for decoding steps, so the encoding steps elements can't
         # attend to decoding steps.
