@@ -62,8 +62,6 @@ class Evaluator:
 
         print(f"Dumping file: {evalai_file}")
 
-
-
     def evaluate(self, split, beam_size):
         eval_df_key = f"{registry['val_on'][0]}_{split}"
         eval_df = pd.read_pickle(registry["Evaluation"][eval_df_key])

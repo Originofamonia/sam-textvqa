@@ -201,6 +201,33 @@ class SAM4C(nn.Module):
 
         return results_dict
 
+    def infer(self, batch_dict, use_beam_search=False):
+        """
+        eval for z^dec * obj
+        """
+        self._forward_obj_encoding(batch_dict)
+        self._forward_ocr_encoding(batch_dict)
+
+        if not use_beam_search:
+            self._forward_mmt_and_output(batch_dict, infer=True)
+        else:
+            self._forward_beam_search(batch_dict)
+
+        if self.use_aux_heads:
+            self._forward_aux(batch_dict)
+
+        results_dict = {
+            "textvqa_scores": batch_dict["scores"],
+            # "spatial_scores": None if not self.use_aux_heads else batch_dict["spatial_head_out"]
+        }
+
+        if "complete_seqs" in batch_dict:
+            results_dict["complete_seqs"] = batch_dict["complete_seqs"].squeeze()
+            results_dict["topkscores"] = batch_dict["topkscores"].squeeze()
+            results_dict["question_id"] = batch_dict["question_id"].squeeze()
+
+        return results_dict
+
     def _forward_obj_encoding(self, batch_dict):
         # object appearance feature: Faster R-CNN fc7, no just identity
         obj_fc7 = self.obj_faster_rcnn_fc7(batch_dict["pad_obj_features"])
@@ -256,28 +283,35 @@ class SAM4C(nn.Module):
         ocr_mmt_in = self.ocr_drop(ocr_mmt_in)
         batch_dict["ocr_mmt_in"] = ocr_mmt_in
 
-    def _forward_mmt(self, batch_dict):
+    def _forward_mmt(self, batch_dict, infer=False):
         # first forward the text BERT layers
         text_bert_out = self.text_bert(batch_dict)
         batch_dict["text_bert_emb"] = self.text_bert_out_linear(text_bert_out)
 
-        mmt_results = self.mmt(
-            batch_dict,
-            fixed_ans_emb=self.classifier.weight,
-        )
+        if infer:
+            mmt_results = self.mmt.infer(
+                batch_dict,
+                fixed_ans_emb=self.classifier.weight,
+            )
+        else:
+            mmt_results = self.mmt(
+                batch_dict,
+                fixed_ans_emb=self.classifier.weight,
+            )
+
         batch_dict.update(mmt_results)
 
     def _forward_output(self, batch_dict):
-        mmt_dec_output = batch_dict["mmt_dec_output"]
-        mmt_ocr_output = batch_dict["mmt_ocr_output"]
-        ocr_mask = batch_dict["pad_ocr_mask"]
+        mmt_dec_output = batch_dict["mmt_dec_output"]  # [B, 12, 768]
+        mmt_ocr_output = batch_dict["mmt_ocr_output"]  # [B, 50, 768]
+        ocr_mask = batch_dict["pad_ocr_mask"]  # [B, 50]
 
-        fixed_scores = self.classifier(mmt_dec_output)
+        fixed_scores = self.classifier(mmt_dec_output)  # [B, 12, 5000] eq3
         dynamic_ocr_scores = self.ocr_ptr_net(mmt_dec_output, mmt_ocr_output, ocr_mask)
         scores = torch.cat([fixed_scores, dynamic_ocr_scores], dim=-1)
         batch_dict["scores"] = scores
 
-    def _forward_mmt_and_output(self, batch_dict):
+    def _forward_mmt_and_output(self, batch_dict, infer=False):
         if self.training:
             # fwd_results['prev_inds'] = sample_list.train_prev_inds.clone()
             self._forward_mmt(batch_dict)
@@ -292,7 +326,7 @@ class SAM4C(nn.Module):
 
             # greedy decoding at test time
             for t in range(dec_step_num):
-                self._forward_mmt(batch_dict)
+                self._forward_mmt(batch_dict, infer)
                 self._forward_output(batch_dict)
 
                 # find the highest scoring output (either a fixed vocab
@@ -861,6 +895,97 @@ class MMT(BertPreTrainedModel):
             "mmt_dec_output": mmt_dec_output,
         }
         return results
+    
+    def infer(self, batch_dict, fixed_ans_emb):
+        # build embeddings for predictions in previous decoding steps
+        # fixed_ans_emb is an embedding lookup table for each fixed vocabulary
+        dec_emb = self.prev_pred_embeddings(  # z^dec, [B, 12, 768]
+            fixed_ans_emb, batch_dict["ocr_mmt_in"], batch_dict["train_prev_inds"]
+        )  # batch_dict["train_prev_inds"]: ans word ids, [B, 12]
+
+        # a zero mask for decoding steps, so the encoding steps elements can't
+        # attend to decoding steps.
+        # A triangular causal mask will be filled for the decoding steps
+        # later in extended_attention_mask
+        dec_mask = torch.zeros(
+            dec_emb.size(0), dec_emb.size(1), dtype=torch.long, device=dec_emb.device
+        )
+        encoder_inputs = torch.cat(
+            [
+                batch_dict["text_bert_emb"],  # [B, 20, 768]
+                batch_dict["obj_mmt_in"],  # [B, 100, 768]
+                batch_dict["ocr_mmt_in"],  # [B, 50, 768]
+                dec_emb,
+            ],
+            dim=1,
+        )
+        attention_mask = torch.cat(
+            [
+                batch_dict["question_mask"],
+                batch_dict["pad_obj_mask"],
+                batch_dict["pad_ocr_mask"],
+                dec_mask,
+            ],
+            dim=1,
+        )
+
+        # offsets of each modality in the joint embedding space
+        txt_max_num = batch_dict["question_mask"].size(-1)
+        obj_max_num = batch_dict["pad_obj_mask"].size(-1)
+        ocr_max_num = batch_dict["pad_ocr_mask"].size(-1)
+        dec_max_num = dec_mask.size(-1)
+        txt_begin = 0
+        txt_end = txt_begin + txt_max_num
+        ocr_begin = txt_max_num + obj_max_num
+        ocr_end = ocr_begin + ocr_max_num
+
+        # We create a 3D attention mask from a 2D tensor mask.
+        # Sizes are [batch_size, 1, from_seq_length, to_seq_length]
+        # So we can broadcast to
+        # [batch_size, num_heads, from_seq_length, to_seq_length]
+        to_seq_length = attention_mask.size(1)
+        from_seq_length = to_seq_length
+
+        # generate the attention mask similar to prefix LM
+        # all elements can attend to the elements in encoding steps
+        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        extended_attention_mask = extended_attention_mask.repeat(
+            1, 1, from_seq_length, 1
+        )
+        # decoding step elements can attend to themselves in a causal manner
+        extended_attention_mask[:, :, -dec_max_num:, -dec_max_num:] = _get_causal_mask(
+            dec_max_num, encoder_inputs.device
+        )
+
+        # flip the mask, so that invalid attention pairs have -10000.
+        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+        assert not extended_attention_mask.requires_grad
+        head_mask = [None] * self.config.num_hidden_layers
+
+        encoder_outputs = self.encoder(  # [B, 182, 768]
+            encoder_inputs, extended_attention_mask, batch_dict, head_mask=head_mask
+        )
+
+        mmt_seq_output = encoder_outputs[0]
+        mmt_txt_output = mmt_seq_output[:, txt_begin: txt_end]  # [0: 20]
+        # mmt_obj_output = mmt_seq_output[:, txt_end: ocr_begin]  # [20: 120]
+        mmt_ocr_output = mmt_seq_output[:, ocr_begin: ocr_end]  # [120: 170]
+        mmt_dec_output = mmt_seq_output[:, -dec_max_num:]  # [-12:]
+
+        img_roi = mmt_seq_output[:, txt_end: ocr_end]  # obj union ocr
+        # img_roi * mmt_dec_output to get top 3n
+        score = torch.matmul(img_roi, mmt_dec_output.transpose(-1, -2))
+        score = score.masked_fill(batch_dict['train_acc_mask'] == 0, -1e9)
+        score = F.softmax(score, dim=1)
+        topk_indices = torch.topk(score, k=3, dim=1)[1]
+
+        results = {
+            "mmt_seq_output": mmt_seq_output,
+            "mmt_txt_output": mmt_txt_output,  # [B, 20, 768]
+            "mmt_ocr_output": mmt_ocr_output,  # [B, 50, 768]
+            "mmt_dec_output": mmt_dec_output,  # [B, 12, 768]
+        }
+        return results
 
 
 class OcrPtrNet(nn.Module):
@@ -917,6 +1042,11 @@ class PrevPredEmbeddings(nn.Module):
         self.emb_dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, ans_emb, ocr_emb, prev_inds):
+        """
+        ans_emb: [5000, 768]
+        ocr_emb: [B, 50, 768]
+        prev_inds: [B, 12]
+        """
         assert prev_inds.dim() == 2 and prev_inds.dtype == torch.long
         assert ans_emb.dim() == 2
 

@@ -33,12 +33,6 @@ logger = logging.getLogger(__name__)
 def get_config():
     # load command line args
     parser = argparse.ArgumentParser()
-    # parser.add_argument(
-    #     "--num_train_epochs",
-    #     # default=3,
-    #     type=int,
-    #     help="Total training epochs",
-    # )
     parser.add_argument(
         "--seed", type=int, default=444, help="Random seed for reproducibility"
     )

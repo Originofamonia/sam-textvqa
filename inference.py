@@ -20,7 +20,7 @@ sys.path.insert(0, pwd)
 
 from evaluator import Evaluator
 from sam.sa_m4c import SAM4C, BertConfig
-from sam.task_utils import (clip_gradients, forward_model,
+from sam.task_utils import (forward_model,
                             get_optim_scheduler, load_datasets)
 from tools.registry import registry
 
@@ -36,12 +36,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 def get_config():
     # load command line args
     parser = argparse.ArgumentParser()
-    # parser.add_argument(
-    #     "--num_train_epochs",
-    #     # default=3,
-    #     type=int,
-    #     help="Total training epochs",
-    # )
     parser.add_argument(
         "--seed", type=int, default=444, help="Random seed for reproducibility"
     )
@@ -103,20 +97,7 @@ def main():
     text_bert_config = BertConfig.from_dict(task_cfg["TextBERT"])
     model = SAM4C(mmt_config, text_bert_config)
 
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Training Parameters: {trainable_params}")
-    optimizer_grouped_parameters = model.get_optimizer_parameters(base_lr)
-    print(len(list(model.named_parameters())), len(optimizer_grouped_parameters))
-
-    optimizer, warmup_scheduler = get_optim_scheduler(
-        task_cfg, optimizer_grouped_parameters, base_lr
-    )
-    start_iter_id, global_step, start_epoch = 0, 0, 0
     model.to(device)
-    for state in optimizer.state.values():
-        for k, v in state.items():
-            if torch.is_tensor(v):
-                state[k] = v.cuda()
 
     if n_gpu > 1:
         model = torch.nn.DataParallel(model)
@@ -127,85 +108,18 @@ def main():
             f"Dumping Evaluation results at: {os.path.dirname(opt.pretrained_eval)}"
         )
         # add load model here
-        model = model.load_state_dict(torch.load(opt.pretrained_eval)['model_state_dict'])
-        return opt.pretrained_eval, model, dataloaders
+        model.load_state_dict(torch.load(opt.pretrained_eval)['model_state_dict'])
 
-    # This validation score is used for model-saving.
-    best_val_step, best_val_score = -1, -1
-    loss_values, score_values = [], []
-    median_num_iter = len(dataloaders["train"])
-
-    # Train loop
-    model.train()
-    for epoch_id in tqdm(range(start_epoch, task_cfg.num_epochs), desc="Epoch"):
-        for step in tqdm(range(median_num_iter), desc="Iters"):
-            assert model.training
-            iter_id = start_iter_id + step + (epoch_id * median_num_iter)
-
-            loss, score, _, _ = forward_model(
-                task_cfg, device, model, dataloaders, "train"
-            )
-
-            # Compute gradients
-            loss.backward()
-            clip_gradients(model, task_cfg["max_grad_norm"])
-
-            # Apply and reset gradients
-            optimizer.step()
-            warmup_scheduler.step()
-            model.zero_grad()
-
-            # Increment loggers
-            global_step += 1
-            loss_values.append(loss)
-            score_values.append(score)
-
-            # Handle logging
-            if step % 41 == 0 and step != 0:
-                loss_avg, score_avg = float(sum(loss_values) / len(loss_values)), float(
-                    sum(score_values) / len(score_values)
-                )
-                loss_values, score_values = [], []
-                log_str = f"Epoch: {epoch_id}: Iter: {iter_id};  loss = {loss_avg:.3f}; accuracy  = {score_avg:.3f}"
-                if step % 100 == 0:
-                    log_str += f"\n lr rates = {[float(grp['lr']) for grp in optimizer.param_groups]}"
-                logger.info(log_str)
-
-        if epoch_id % 9 ==0:
-            curr_val_score = evaluate(dataloaders, task_cfg, device, model)
-            logger.info(
-                f"[Validation] Current VQA: {curr_val_score:.3f} at {global_step} | Best VQA: {best_val_score:.3f} at {best_val_step}"
-            )
-
-        if curr_val_score > best_val_score:
-            logger.info(f"Saving Checkpoint: {checkpoint_path}")
-            model_to_save = model.module if hasattr(model, "module") else model
-            best_val_score, best_val_step = curr_val_score, global_step
-            torch.save(
-                {
-                    "model_state_dict": model_to_save.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "warmup_scheduler_state_dict": warmup_scheduler.state_dict(),
-                    "global_step": global_step,
-                    "current_val_score": curr_val_score,
-                    "epoch_id": epoch_id,
-                },
-                checkpoint_path,
-            )
-
-    print(
-        f"Best Validation Score: {best_val_score:.3f}, Best Validation Epoch: {best_val_step}"
-    )
-    return checkpoint_path, model, dataloaders
+    curr_val_score = evaluate(dataloaders['val'], task_cfg, device, model)
 
 
-def evaluate(dataloaders, task_cfg, device, model):
+def evaluate(dataloader, task_cfg, device, model):
     scores, batch_sizes = [], []
     model.eval()
     with torch.no_grad():
-        for batch_dict in tqdm(dataloaders["val"], desc="Validation"):
-            loss, score, batch_size, _ = forward_model(
-                task_cfg, device, model, batch_dict=batch_dict
+        for batch_dict in tqdm(dataloader, desc="Validation"):
+            loss, score, batch_size, _ = forward_model(  # need a new forward
+                task_cfg, device, model, batch_dict=batch_dict, evaluate=True
             )
             scores.append(score * batch_size)
             batch_sizes.append(batch_size)
@@ -215,7 +129,7 @@ def evaluate(dataloaders, task_cfg, device, model):
 
 
 if __name__ == "__main__":
-    checkpoint_path, model, dataloaders = main()
+    main()
 
     assert os.path.exists(checkpoint_path)
     task = registry["val_on"][0]
