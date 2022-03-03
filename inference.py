@@ -6,6 +6,8 @@ import logging
 import os
 import sys
 import random
+import json
+import urllib
 from io import open
 from pprint import pprint
 
@@ -114,21 +116,63 @@ def main():
 
 
 def evaluate(dataloader, task_cfg, device, model):
+    obj_json_list, ocr_json_list = [], []
+    with open(f'/home/qiyuan/2022spring/sam-textvqa/data/textvqa/TextVQA_0.5.1_val.json', 'r') as f:
+        json_content = f.read()
+        obj_json_list = json.loads(json_content)['data']
+        obj_qids = [item['question_id'] for item in obj_json_list]
+        
+    with open(f'/home/qiyuan/2022spring/sam-textvqa/data/textvqa/TextVQA_Rosetta_OCR_v0.2_val.json', 'r') as f:
+        json_content = f.read()
+        ocr_json_list = json.loads(json_content)['data']
+
     scores, batch_sizes = [], []
+
     model.eval()
     with torch.no_grad():
-        for batch_dict in tqdm(dataloader, desc="Validation"):
-            loss, score, batch_size, _ = forward_model(  # need a new forward
-                task_cfg, device, model, batch_dict=batch_dict, evaluate=True
-            )
-            scores.append(score * batch_size)
-            batch_sizes.append(batch_size)
+        for i, batch_dict in tqdm(enumerate(dataloader), desc="Validation"):
+            if i < 100:
+                qid = batch_dict['question_id'].item()
+                json_idx = obj_qids.index(qid)
+                obj_json = obj_json_list[json_idx]
+                ocr_json = ocr_json_list[json_idx]
+                batch_dict['obj_json'] = obj_json
+                batch_dict['ocr_json'] = ocr_json
+                loss, score, batch_size, _ = forward_model(
+                    task_cfg, device, model, batch_dict=batch_dict, infer=True
+                )
+                scores.append(score * batch_size)
+                batch_sizes.append(batch_size)
 
-    model.train()
+    # model.train()
     return sum(scores) / sum(batch_sizes)
 
 
+def download_val_images():
+    data_folder = '/home/qiyuan/2022spring/sam-textvqa/data/textvqa/'
+    with open(f'{data_folder}TextVQA_0.5.1_val.json', 'r') as f:
+        json_content = f.read()
+        obj_json_list = json.loads(json_content)['data']
+        img_urls = [item['flickr_300k_url'] for item in obj_json_list]
+    
+    for i, img_url in enumerate(img_urls):
+        img_name = obj_json_list[i]['image_id']
+        save_imgfile = f'/home/qiyuan/2022spring/sam-textvqa/data/textvqa/val_images/{img_name}.jpg'
+        with open(save_imgfile, 'wb') as f2:
+            try:
+                f2.write(urllib.request.urlopen(img_url).read())
+            except:
+                print(f'img {img_name} not found')
+                os.remove(save_imgfile)
+            f2.close()
+            print(f'download {img_name} successful')
+
+    files = os.listdir(f'{data_folder}/val_images')  # downloaded 2859 imgs
+    print(len(files))
+
+
 if __name__ == "__main__":
+    # download_val_images()  # run once
     main()
 
     assert os.path.exists(checkpoint_path)

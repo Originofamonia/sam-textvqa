@@ -97,7 +97,7 @@ def compute_score_with_logits(logits, labels):
 
 
 def forward_model(task_cfg, device, model, dataloaders=None, split="train",
-    batch_dict=None, beam_search=False, evaluate=False):
+    batch_dict=None, beam_search=False, infer=False):
     """Can work with a dataloader [train] or batch_dict [eval] whichever is passed."""
     if batch_dict is None:
         # training
@@ -108,10 +108,10 @@ def forward_model(task_cfg, device, model, dataloaders=None, split="train",
             batch_dict[key] = value.cuda(device=device, non_blocking=True)
 
     batch_size = len(batch_dict["question_id"])
-    if evaluate:
-        results_dict = model.infer(batch_dict, beam_search)
-    else:
-        results_dict = model(batch_dict, beam_search)
+    # if infer:
+    #     results_dict = model.infer(batch_dict, beam_search)
+    # else:
+    results_dict = model(batch_dict, beam_search, infer=infer)
 
     batch_dict.update(results_dict)
 
