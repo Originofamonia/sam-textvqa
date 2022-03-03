@@ -1,6 +1,13 @@
 import functools
 import logging
 import math
+import os
+import numpy as np
+from os.path import exists
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+import matplotlib.collections as mcoll
+import matplotlib.path as mpath
 from collections import Counter
 
 import torch
@@ -176,13 +183,13 @@ class SAM4C(nn.Module):
         self.dest_transform = SimpleClassifier(self.mmt_config.hidden_size, 128, 32)
         self.spatial_classifier = nn.Linear(32, 12)
 
-    def forward(self, batch_dict, use_beam_search=False):
+    def forward(self, batch_dict, use_beam_search=False, infer=False):
         """Main forward method"""
         self._forward_obj_encoding(batch_dict)
         self._forward_ocr_encoding(batch_dict)
 
         if not use_beam_search:
-            self._forward_mmt_and_output(batch_dict)
+            self._forward_mmt_and_output(batch_dict, infer)
         else:
             self._forward_beam_search(batch_dict)
 
@@ -198,6 +205,58 @@ class SAM4C(nn.Module):
             results_dict["complete_seqs"] = batch_dict["complete_seqs"].squeeze()
             results_dict["topkscores"] = batch_dict["topkscores"].squeeze()
             results_dict["question_id"] = batch_dict["question_id"].squeeze()
+        
+        if infer:  # plot
+            img_folder = '/home/qiyuan/2022spring/sam-textvqa/data/textvqa/val_images/'
+            tvqa_save_dir = f'{os.getcwd()}/save/tvqa'
+            img_id = img_folder + batch_dict['obj_json']['image_id'] + '.jpg'
+            if exists(img_id):  # and torch.sum(batch_dict['train_loss_mask'], dim=-1) > 0:
+                mask = batch_dict['train_loss_mask'].ge(0.1).unsqueeze(-1).expand(-1, -1, 50)
+                ocr_scores = batch_dict['scores'][:, :, -50:]  # [1, 12, 50]
+                masked_ocr_scores = torch.masked_select(ocr_scores, mask)  # [B, mask, 50]
+                masked_ocr_scores = masked_ocr_scores.view(-1, 50)
+                if masked_ocr_scores.dim() < 2:
+                    masked_ocr_scores = masked_ocr_scores.unsqueeze(0)
+                # mmt_seq_output = batch_dict['mmt_seq_output']  # [B, 182, 768]
+                # roi = mmt_seq_output[:, 20: 170]  # obj union ocr
+                # # img_roi * mmt_dec_output to get top scores; until here is correct 2/28
+                # score = torch.matmul(roi, masked_dec_output.transpose(-1, -2))  # [B, 150, ans]
+                # score = torch.sum(score, dim=-1)  # sum all ans words [B, 150]
+                masked_ocr_scores = torch.sum(masked_ocr_scores, dim=0)  # sum all OCRs
+                topk_indices = torch.topk(masked_ocr_scores, k=4, dim=-1).indices
+                topk_indices = topk_indices.squeeze()
+                sorted_indices = torch.sort(topk_indices).values.detach().cpu().numpy()
+                # obj_idx = sorted_indices[sorted_indices < 100]
+                boxes = batch_dict['pad_ocr_bboxes'][:, sorted_indices]
+                # ocr_idx = sorted_indices[sorted_indices >= 100]
+                # if len(ocr_idx) > 0:
+                #     ocr_idx = ocr_idx - 100
+                #     ocr_boxes = batch_dict['pad_ocr_bboxes'][:, ocr_idx]
+                #     boxes = torch.cat((boxes, ocr_boxes), dim=1)
+                
+                boxes = boxes.squeeze()[:, :4]
+
+                img = plt.imread(f'{img_id}')  # h, w, ch
+                q = batch_dict['obj_json']['question']
+                ans = ', '.join(batch_dict['obj_json']['answers'])
+                w, h = batch_dict['image_width'].item(), batch_dict['image_height'].item()
+                ratio = img.shape[0] / h
+                x1, x2 = boxes[:, 0].unsqueeze(1) * w * ratio, boxes[:, 2].unsqueeze(1) * w * ratio
+                y1, y2 = boxes[:, 1].unsqueeze(1) * h * ratio, boxes[:, 3].unsqueeze(1) * h * ratio
+                boxes = torch.cat((x1, y1, x2, y2), dim=1)
+                fig, ax = plt.subplots()
+                ax.imshow(img)
+                for i, box in enumerate(boxes):
+                    box_w, box_h = box[2] - box[0], box[3] - box[0]
+                    rect = Rectangle((box[0].item(), box[1].item()), box_w, box_h, linewidth=2, 
+                        edgecolor=np.random.rand(3,), facecolor='none', alpha=1)
+                    ax.add_patch(rect)
+                caption = f'q: {q};\n ans: {ans}'
+                fig.text(0.01, 0.91, f'{caption}')
+                iid = batch_dict['obj_json']['image_id'] + '.jpg'
+                f1 = os.path.join(tvqa_save_dir, f'{iid}')
+                plt.savefig(f1)
+                plt.close()
 
         return results_dict
 
@@ -288,28 +347,29 @@ class SAM4C(nn.Module):
         text_bert_out = self.text_bert(batch_dict)
         batch_dict["text_bert_emb"] = self.text_bert_out_linear(text_bert_out)
 
-        if infer:
-            mmt_results = self.mmt.infer(
-                batch_dict,
-                fixed_ans_emb=self.classifier.weight,
-            )
-        else:
-            mmt_results = self.mmt(
-                batch_dict,
-                fixed_ans_emb=self.classifier.weight,
-            )
+        # if infer:
+        # mmt_results = self.mmt.infer(
+        #     batch_dict,
+        #     fixed_ans_emb=self.classifier.weight,
+        # )
+        # else:
+        mmt_results = self.mmt(
+            batch_dict,
+            fixed_ans_emb=self.classifier.weight,
+        )
 
-        batch_dict.update(mmt_results)
+        if mmt_results:
+            batch_dict.update(mmt_results)
 
     def _forward_output(self, batch_dict):
-        mmt_dec_output = batch_dict["mmt_dec_output"]  # [B, 12, 768]
+        mmt_dec_output = batch_dict["mmt_dec_output"]  # [B, 12, 768], z^dec
         mmt_ocr_output = batch_dict["mmt_ocr_output"]  # [B, 50, 768]
         ocr_mask = batch_dict["pad_ocr_mask"]  # [B, 50]
 
         fixed_scores = self.classifier(mmt_dec_output)  # [B, 12, 5000] eq3
         dynamic_ocr_scores = self.ocr_ptr_net(mmt_dec_output, mmt_ocr_output, ocr_mask)
         scores = torch.cat([fixed_scores, dynamic_ocr_scores], dim=-1)
-        batch_dict["scores"] = scores
+        batch_dict["scores"] = scores  # [B, 12, 5050]
 
     def _forward_mmt_and_output(self, batch_dict, infer=False):
         if self.training:
@@ -334,6 +394,7 @@ class SAM4C(nn.Module):
                 # decoding
                 argmax_inds = batch_dict["scores"].argmax(dim=-1)
                 batch_dict["train_prev_inds"][:, 1:] = argmax_inds[:, :-1]
+
 
     def _forward_beam_search(self, batch_dict):
         dec_step_num = batch_dict["train_prev_inds"].size(1)
@@ -897,95 +958,107 @@ class MMT(BertPreTrainedModel):
         return results
     
     def infer(self, batch_dict, fixed_ans_emb):
-        # build embeddings for predictions in previous decoding steps
-        # fixed_ans_emb is an embedding lookup table for each fixed vocabulary
-        dec_emb = self.prev_pred_embeddings(  # z^dec, [B, 12, 768]
-            fixed_ans_emb, batch_dict["ocr_mmt_in"], batch_dict["train_prev_inds"]
-        )  # batch_dict["train_prev_inds"]: ans word ids, [B, 12]
+        img_folder = '/home/qiyuan/2022spring/sam-textvqa/data/textvqa/val_images/'
+        tvqa_save_dir = f'{os.getcwd()}/save/tvqa'
+        img_id = img_folder + batch_dict['obj_json']['image_id'] + '.jpg'
+        if exists(img_id):
+            # build embeddings for predictions in previous decoding steps
+            # fixed_ans_emb is an embedding lookup table for each fixed vocabulary
+            dec_emb = self.prev_pred_embeddings(  # z^dec, [B, 12, 768]
+                fixed_ans_emb, batch_dict["ocr_mmt_in"], batch_dict["train_prev_inds"]
+            )  # batch_dict["train_prev_inds"]: ans word ids, [B, 12]
 
-        # a zero mask for decoding steps, so the encoding steps elements can't
-        # attend to decoding steps.
-        # A triangular causal mask will be filled for the decoding steps
-        # later in extended_attention_mask
-        dec_mask = torch.zeros(
-            dec_emb.size(0), dec_emb.size(1), dtype=torch.long, device=dec_emb.device
-        )
-        encoder_inputs = torch.cat(
-            [
-                batch_dict["text_bert_emb"],  # [B, 20, 768]
-                batch_dict["obj_mmt_in"],  # [B, 100, 768]
-                batch_dict["ocr_mmt_in"],  # [B, 50, 768]
-                dec_emb,
-            ],
-            dim=1,
-        )
-        attention_mask = torch.cat(
-            [
-                batch_dict["question_mask"],
-                batch_dict["pad_obj_mask"],
-                batch_dict["pad_ocr_mask"],
-                dec_mask,
-            ],
-            dim=1,
-        )
+            # a zero mask for decoding steps, so the encoding steps elements can't
+            # attend to decoding steps.
+            # A triangular causal mask will be filled for the decoding steps
+            # later in extended_attention_mask
+            dec_mask = torch.zeros(
+                dec_emb.size(0), dec_emb.size(1), dtype=torch.long, device=dec_emb.device
+            )
+            encoder_inputs = torch.cat(
+                [
+                    batch_dict["text_bert_emb"],  # [B, 20, 768]
+                    batch_dict["obj_mmt_in"],  # [B, 100, 768]
+                    batch_dict["ocr_mmt_in"],  # [B, 50, 768]
+                    dec_emb,
+                ],
+                dim=1,
+            )
+            attention_mask = torch.cat(
+                [
+                    batch_dict["question_mask"],
+                    batch_dict["pad_obj_mask"],
+                    batch_dict["pad_ocr_mask"],
+                    dec_mask,
+                ],
+                dim=1,
+            )
 
-        # offsets of each modality in the joint embedding space
-        txt_max_num = batch_dict["question_mask"].size(-1)
-        obj_max_num = batch_dict["pad_obj_mask"].size(-1)
-        ocr_max_num = batch_dict["pad_ocr_mask"].size(-1)
-        dec_max_num = dec_mask.size(-1)
-        txt_begin = 0
-        txt_end = txt_begin + txt_max_num
-        ocr_begin = txt_max_num + obj_max_num
-        ocr_end = ocr_begin + ocr_max_num
+            # offsets of each modality in the joint embedding space
+            txt_max_num = batch_dict["question_mask"].size(-1)
+            obj_max_num = batch_dict["pad_obj_mask"].size(-1)
+            ocr_max_num = batch_dict["pad_ocr_mask"].size(-1)
+            dec_max_num = dec_mask.size(-1)
+            txt_begin = 0
+            txt_end = txt_begin + txt_max_num
+            ocr_begin = txt_max_num + obj_max_num
+            ocr_end = ocr_begin + ocr_max_num
 
-        # We create a 3D attention mask from a 2D tensor mask.
-        # Sizes are [batch_size, 1, from_seq_length, to_seq_length]
-        # So we can broadcast to
-        # [batch_size, num_heads, from_seq_length, to_seq_length]
-        to_seq_length = attention_mask.size(1)
-        from_seq_length = to_seq_length
+            # We create a 3D attention mask from a 2D tensor mask.
+            # Sizes are [batch_size, 1, from_seq_length, to_seq_length]
+            # So we can broadcast to
+            # [batch_size, num_heads, from_seq_length, to_seq_length]
+            to_seq_length = attention_mask.size(1)
+            from_seq_length = to_seq_length
 
-        # generate the attention mask similar to prefix LM
-        # all elements can attend to the elements in encoding steps
-        extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        extended_attention_mask = extended_attention_mask.repeat(
-            1, 1, from_seq_length, 1
-        )
-        # decoding step elements can attend to themselves in a causal manner
-        extended_attention_mask[:, :, -dec_max_num:, -dec_max_num:] = _get_causal_mask(
-            dec_max_num, encoder_inputs.device
-        )
+            # generate the attention mask similar to prefix LM
+            # all elements can attend to the elements in encoding steps
+            extended_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            extended_attention_mask = extended_attention_mask.repeat(
+                1, 1, from_seq_length, 1
+            )
+            # decoding step elements can attend to themselves in a causal manner
+            extended_attention_mask[:, :, -dec_max_num:, -dec_max_num:] = _get_causal_mask(
+                dec_max_num, encoder_inputs.device
+            )
 
-        # flip the mask, so that invalid attention pairs have -10000.
-        extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
-        assert not extended_attention_mask.requires_grad
-        head_mask = [None] * self.config.num_hidden_layers
+            # flip the mask, so that invalid attention pairs have -10000.
+            extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
+            assert not extended_attention_mask.requires_grad
+            head_mask = [None] * self.config.num_hidden_layers
 
-        encoder_outputs = self.encoder(  # [B, 182, 768]
-            encoder_inputs, extended_attention_mask, batch_dict, head_mask=head_mask
-        )
+            encoder_outputs = self.encoder(
+                encoder_inputs, extended_attention_mask, batch_dict, head_mask=head_mask
+            )
 
-        mmt_seq_output = encoder_outputs[0]
-        mmt_txt_output = mmt_seq_output[:, txt_begin: txt_end]  # [0: 20]
-        # mmt_obj_output = mmt_seq_output[:, txt_end: ocr_begin]  # [20: 120]
-        mmt_ocr_output = mmt_seq_output[:, ocr_begin: ocr_end]  # [120: 170]
-        mmt_dec_output = mmt_seq_output[:, -dec_max_num:]  # [-12:]
+            mmt_seq_output = encoder_outputs[0]  # [B, 182, 768]
+            mmt_txt_output = mmt_seq_output[:, txt_begin: txt_end]  # [0: 20]
+            # mmt_obj_output = mmt_seq_output[:, txt_end: ocr_begin]  # [20: 120]
+            mmt_ocr_output = mmt_seq_output[:, ocr_begin: ocr_end]  # [120: 170]
+            mmt_dec_output = mmt_seq_output[:, -dec_max_num:]  # [-12:]
 
-        img_roi = mmt_seq_output[:, txt_end: ocr_end]  # obj union ocr
-        # img_roi * mmt_dec_output to get top 3n
-        score = torch.matmul(img_roi, mmt_dec_output.transpose(-1, -2))
-        score = score.masked_fill(batch_dict['train_acc_mask'] == 0, -1e9)
-        score = F.softmax(score, dim=1)
-        topk_indices = torch.topk(score, k=3, dim=1)[1]
+            results = {
+                "mmt_seq_output": mmt_seq_output,
+                "mmt_txt_output": mmt_txt_output,  # [B, 20, 768]
+                "mmt_ocr_output": mmt_ocr_output,  # [B, 50, 768]
+                "mmt_dec_output": mmt_dec_output,  # [B, 12, 768]
+            }
+            return results
+        else:
+            return
 
-        results = {
-            "mmt_seq_output": mmt_seq_output,
-            "mmt_txt_output": mmt_txt_output,  # [B, 20, 768]
-            "mmt_ocr_output": mmt_ocr_output,  # [B, 50, 768]
-            "mmt_dec_output": mmt_dec_output,  # [B, 12, 768]
-        }
-        return results
+
+def plot_one_box(box, img, color=None, label=None, line_thickness=None):
+    # Plots one bounding box on image img
+    tl = line_thickness or round(
+        0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
+    color = color if color is not None else [random.randint(0, 255) for _ in
+                                             range(3)]
+    c1, c2 = (int(box[0]), int(box[1])), (int(box[2]), int(box[3]))
+    # thickness must be integer
+    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+    center = (int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2))
+    cv2.circle(img, center, radius=0, color=color, thickness=tl * 2)
 
 
 class OcrPtrNet(nn.Module):
@@ -1001,6 +1074,9 @@ class OcrPtrNet(nn.Module):
         self.key = nn.Linear(hidden_size, query_key_size)
 
     def forward(self, query_inputs, key_inputs, attention_mask):
+        """
+        q: mmt_dec_output, k: mmt_ocr_output, mask: ocr_mask
+        """
         extended_attention_mask = (1.0 - attention_mask) * -10000.0
         assert extended_attention_mask.dim() == 2
         extended_attention_mask = extended_attention_mask.unsqueeze(1)
@@ -1012,14 +1088,14 @@ class OcrPtrNet(nn.Module):
         else:
             squeeze_result = False
         key_layer = self.key(key_inputs)
-
+        # [B, 12, 768] * [B, 50, 768]
         scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
         scores = scores / math.sqrt(self.query_key_size)
         scores = scores + extended_attention_mask
         if squeeze_result:
             scores = scores.squeeze(1)
 
-        return scores
+        return scores  # [B, 12, 50]
 
 
 class PrevPredEmbeddings(nn.Module):
